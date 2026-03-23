@@ -16,16 +16,18 @@ jobs:
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    - name: Build images
-      run: |
-        az acr build --registry carlos69lamejor --image app1:latest apps/app1
-        az acr build --registry carlos69lamejor --image app2:latest apps/app2
-
-    - name: Terraform apply
+    # 🔥 PRIMERO: crear infraestructura (ACR incluido)
+    - name: Terraform apply (infra)
       run: |
         cd terraform
         terraform init
         terraform apply -auto-approve
+
+    # 🔥 SEGUNDO: ahora sí ACR existe
+    - name: Build images
+      run: |
+        az acr build --registry carlos69lamejor --image app1:latest apps/app1
+        az acr build --registry carlos69lamejor --image app2:latest apps/app2
 
     - name: Get AKS creds
       run: az aks get-credentials --resource-group rg-enterprise-final --name aks-enterprise-final --overwrite-existing
@@ -36,7 +38,8 @@ jobs:
     - name: Deploy apps
       run: kubectl apply -f k8s
 
-    - name: Re-apply Terraform (APIM binds ingress)
+    # 🔥 TERCERO: ahora sí APIM puede leer el ingress
+    - name: Terraform apply (APIM binding)
       run: |
         cd terraform
         terraform apply -auto-approve
