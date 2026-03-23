@@ -10,36 +10,94 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    # 🔹 Checkout código
+    - name: Checkout
+      uses: actions/checkout@v3
 
-    - uses: azure/login@v1
+    # 🔹 Login a Azure
+    - name: Azure Login
+      uses: azure/login@v1
       with:
         creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-    # 🔥 PRIMERO: crear infraestructura (ACR incluido)
-    - name: Terraform apply (infra)
+    # 🔹 Instalar Terraform
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.7
+
+    # 🔹 Validaciones (enterprise best practice)
+    - name: Terraform Format Check
+      run: |
+        cd terraform
+        terraform fmt -check
+
+    - name: Terraform Init
       run: |
         cd terraform
         terraform init
+
+    - name: Terraform Validate
+      run: |
+        cd terraform
+        terraform validate
+
+    # 🔥 PRIMERO: Crear infraestructura (ACR, AKS, APIM, etc.)
+    - name: Terraform Apply (Infraestructura)
+      run: |
+        cd terraform
         terraform apply -auto-approve
 
-    # 🔥 SEGUNDO: ahora sí ACR existe
-    - name: Build images
+    # 🔥 SEGUNDO: Build de imágenes (ACR ya existe)
+    - name: Build images in ACR
       run: |
-        az acr build --registry carlos69lamejor --image app1:latest apps/app1
-        az acr build --registry carlos69lamejor --image app2:latest apps/app2
+        az acr login --name carlos69lamejor
 
-    - name: Get AKS creds
-      run: az aks get-credentials --resource-group rg-enterprise-final --name aks-enterprise-final --overwrite-existing
+        az acr build \
+          --registry carlos69lamejor \
+          --image app1:${{ github.sha }} \
+          apps/app1
 
-    - name: Install ingress
-      run: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+        az acr build \
+          --registry carlos69lamejor \
+          --image app2:${{ github.sha }} \
+          apps/app2
 
-    - name: Deploy apps
-      run: kubectl apply -f k8s
+    # 🔹 Obtener credenciales de AKS
+    - name: Get AKS Credentials
+      run: |
+        az aks get-credentials \
+          --resource-group rg-enterprise-final \
+          --name aks-enterprise-final \
+          --overwrite-existing
 
-    # 🔥 TERCERO: ahora sí APIM puede leer el ingress
-    - name: Terraform apply (APIM binding)
+    # 🔹 Instalar Ingress Controller
+    - name: Install NGINX Ingress
+      run: |
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+
+    # 🔥 Esperar a que el ingress tenga IP (CRÍTICO)
+    - name: Wait for Ingress External IP
+      run: |
+        echo "Esperando IP pública del ingress..."
+        for i in {1..30}; do
+          IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          if [ -n "$IP" ]; then
+            echo "Ingress IP: $IP"
+            exit 0
+          fi
+          sleep 10
+        done
+        echo "Timeout esperando IP del ingress"
+        exit 1
+
+    # 🔹 Deploy aplicaciones en AKS
+    - name: Deploy Apps
+      run: |
+        kubectl apply -f k8s
+
+    # 🔥 TERCERO: Re-aplicar Terraform para conectar APIM al ingress
+    - name: Terraform Apply (APIM binding)
       run: |
         cd terraform
         terraform apply -auto-approve
