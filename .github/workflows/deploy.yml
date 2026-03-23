@@ -1,0 +1,42 @@
+name: Enterprise Full Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - uses: azure/login@v1
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    - name: Build images
+      run: |
+        az acr build --registry carlos69lamejor --image app1:latest apps/app1
+        az acr build --registry carlos69lamejor --image app2:latest apps/app2
+
+    - name: Terraform apply
+      run: |
+        cd terraform
+        terraform init
+        terraform apply -auto-approve
+
+    - name: Get AKS creds
+      run: az aks get-credentials --resource-group rg-enterprise-final --name aks-enterprise-final --overwrite-existing
+
+    - name: Install ingress
+      run: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml
+
+    - name: Deploy apps
+      run: kubectl apply -f k8s
+
+    - name: Re-apply Terraform (APIM binds ingress)
+      run: |
+        cd terraform
+        terraform apply -auto-approve
